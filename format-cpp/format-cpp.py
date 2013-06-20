@@ -5,27 +5,30 @@ import re
 import sys
 
 # list of extensions to replace
-replace_extensions = [".cpp", ".h", ".mm"]
+replace_extensions = [".cpp", ".h", ".hpp", ".cc", ".mm"]
 files_to_skip = None
+replace_type = None
+skip_contents = ["CCPointMake", "CCSizeMake", "CCRectMake", "CCLOG", \
+                 "CCLog", "CCAssert", "CCSkeleton"]
 
 def try_to_replace(fname):
-    if replace_extensions:
-        for replace_extension in replace_extensions:
-            if fname.lower().endswith(replace_extension):
-                return True
+    if replace_type == "add_namespace":
+        if fname.lower().endswith(".h"):
+            return True
         return False
-    return True
+    else:
+        if replace_extensions:
+            for replace_extension in replace_extensions:
+                if fname.lower().endswith(replace_extension):
+                    return True
+    return False
 
 
-def replacement(m):
+def replacement_member_variable(m):
     # print "group 2: ", m.group(2)
     name_prefix = m.group(3)
     first = name_prefix[0]
     second = ""
-    # if m.group(2) == "m_p" or m.group(2) == "m_s":
-    #     if name_prefix[0].islower():
-    #         first = m.group(2)[-1]
-    #         name_prefix = first + name_prefix
 
     if len(name_prefix) > 1:
         second = name_prefix[1]
@@ -42,6 +45,41 @@ def replacement(m):
         return m.group(1) + "_" + name_prefix
     return m.group(1) + m.group(2) + m.group(3)
 
+
+def remove_prefix_callback(m):
+    pos = 0
+    for skip_content in skip_contents:
+        start = 0
+        while True:
+            pos = m.string.find(skip_content, start)
+            if pos == -1:
+                break
+            if pos == m.end(1):
+                return m.group(1) + "CC" + m.group(2)
+            start = pos + 1
+    return m.group(1) + m.group(2)
+
+
+def add_namespace_callback(m):
+    """
+    
+    Arguments:
+    - `m`:
+    """
+    return m.group(1) + "cocos2d::" + m.group(2)
+
+
+def replace_callback(m):
+    if replace_type == "replace_variable":
+        return replacement_member_variable(m)
+    elif replace_type == "remove_prefix":
+        return remove_prefix_callback(m)
+    elif replace_type == "add_namespace":
+        return add_namespace_callback(m)
+    else:
+        raise Exception("type error.")
+
+
 def file_replace(fname, pat):
     # first, see if the pattern is even in the file.
     with open(fname) as f:
@@ -55,16 +93,9 @@ def file_replace(fname, pat):
         out = open(out_fname, "w")
         for line in f:
             repl = line
-            # for match in re.finditer(pat, line):
-            #     print match.regs
-            #     print match.group(1)
-            #
-            # matches = re.findall(pat, line)
-            # print matches
             m = re.search(pat, line)
             if m:
-                # repl = re.sub(pat, "_" + r'\1', line)
-                repl = re.sub(pat, replacement, line)
+                repl = re.sub(pat, replace_callback, line)
 
             out.write(repl)
         out.close()
@@ -86,7 +117,6 @@ def mass_replace(dir_name, s_before):
                             break
                 if not need_skip:
                     file_replace(fullname, pat)
-
 
 
 prefix_need_replace = [
@@ -112,26 +142,56 @@ prefix_need_replace = [
     "m_"
 ]
 
-def do_replace(dir, dir_skip_list):
+
+def do_replace(dir):
     """
 
     Arguments:
     - `dir`:
     - `dir_skip`:
     """
-    global files_to_skip
-    files_to_skip = dir_skip_list
 
     for p in prefix_need_replace:
         # mass_replace(".", p)
         pat = "([^\w])(" + p + ')(\w{1,2})'
-        # mass_replace(".", pat)
-        # mass_replace("/Users/james/Project/cocos2d-x/cocos2dx", pat)
         mass_replace(dir, pat)
         pat = "(^)(" + p + ')(\w{1,2})'
-        # mass_replace(".", pat)
-        # mass_replace("/Users/james/Project/cocos2d-x/cocos2dx", pat)
         mass_replace(dir, pat)
+
+
+remove_prefix_patterns = [
+    "([^/_\"])CC([A-Z][a-z])", \
+    "(^)CC([A-Z][a-z])", \
+    "([^/_\"])CC(IME[A-Z][a-z])", \
+    "(^)CC(IME[A-Z][a-z])", \
+    "([^/_\"])CC(TMX)", \
+    "(^)CC(TMX)", \
+    "([^/_\"])CC(GL\w)", \
+    "(^)CC(GL\w)", \
+    "([^/_\"])CC(EGL)", \
+    "(^)CC(EGL)", \
+    "([^/_\"])CC(EGL)", \
+    "(^)CC(EGL)", \
+    "([^/_\"])CC(RGBA)", \
+    "(^)CC(RGBA)", \
+    "([^/_\"])CC(SAX)", \
+    "(^)CC(SAX)"
+]
+
+
+def do_remove_prefix(dir):
+    for pat in remove_prefix_patterns:
+        mass_replace(dir, pat)
+
+
+def do_add_namespace(dir):
+    """
+    
+    Arguments:
+    - `dir`:
+    """
+    pat = "([\s(])(CC[A-Z][a-z])"
+    mass_replace(dir, pat)
 
 
 def main():
@@ -140,22 +200,40 @@ def main():
     from optparse import OptionParser
 
     parser = OptionParser("usage: %prog format-cpp -d DIR_NAME [-s FILES_TO_SKIP]")
+    parser.add_option("-t", "--type",
+                      action="store", type="string", dest="type", default="replace_variable",
+                      help="replace member variable")
+
     parser.add_option("-d", "--dir",
-                      action="store", type="string", dest="dir_name",
+                      action="store", type="string", dest="dir_name", default=None,
                       help="Cpp files in Directory to format")
 
     parser.add_option("-s", "--skip",
                       action="append", type="string", dest="skips", default=None,
                       help="Files to skip")
 
+
     (options, args) = parser.parse_args(sys.argv)
 
     # print options
+    if options.dir_name is None:
+        raise Exception("Don't set -d at the same time");
 
-    if options.dir_name == None:
-        raise Exception("Please set dir by \"-d\" or \"--dir\", run format-cpp -h for the usage.")
+    global replace_type
+    replace_type = options.type
 
-    do_replace(options.dir_name, options.skips)
+    global files_to_skip
+    files_to_skip = options.skips
+
+    if options.type == "replace_variable":
+        do_replace(options.dir_name)
+    elif options.type == "remove_prefix":
+        do_remove_prefix(options.dir_name)
+    elif options.type == "add_namespace":
+        do_add_namespace(options.dir_name)
+    else:
+        raise Exception("type error, please use correct -t opinion.")
+
 
 if __name__ == '__main__':
     try:
